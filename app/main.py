@@ -1,6 +1,6 @@
 from fastapi import FastAPI, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
-from app.routes import template_routes
+from app.routes import template_routes, csv_routes
 
 app = FastAPI()
 
@@ -15,6 +15,7 @@ app.add_middleware(
 )
 
 app.include_router(template_routes.router, prefix="/api")
+app.include_router(csv_routes.router, prefix="/api")
 
 @app.get("/")
 def root():

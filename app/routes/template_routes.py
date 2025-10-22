@@ -28,7 +28,7 @@ async def upload_template(file: UploadFile = File(...)):
     with open(file_path, "wb") as f:
         f.write(await file.read())
 
-    # ✅ Save to session_data
+    # Save to session_data
     session_data["template_file"] = file.filename
 
     placeholders = []

@@ -13,6 +13,12 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 PLACEHOLDER_RE = re.compile(r"<<(.*?)>>")
 
+fitz.TOOLS.set_annot_stem("annot")
+
+# Register custom font
+FONT_PATH = "app/fonts/arial.ttf"
+if os.path.exists(FONT_PATH):
+    fitz.Font("custom_font", FONT_PATH)
 def replace_placeholders_in_pdf(input_path: str, output_path: str, mappings: dict, row: pd.Series):
     """
     Replace placeholders in a PDF template by redacting them and inserting replacement text.
@@ -90,7 +96,7 @@ def replace_placeholders_in_pdf(input_path: str, output_path: str, mappings: dic
                     data["insert_rect"],
                     data["text"],
                     fontsize=data["fontsize"],
-                    fontname=data["fontname"],
+                    fontname="custom_font",
                     color=data["color"],
                     align=0  # Left-align
                 )

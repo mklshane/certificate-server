@@ -32,7 +32,7 @@ async def upload_csv(file: UploadFile = File(...)):
             detail=f"Error reading CSV file: {str(e)}"
         )
 
-    # ✅ Save to session_data
+    # Save to session_data
     session_data["csv_file"] = file.filename
 
     return JSONResponse({

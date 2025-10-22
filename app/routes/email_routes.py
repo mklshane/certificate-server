@@ -1,72 +1,101 @@
 import os
+import base64
 import pandas as pd
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
-from app.routes.generate_routes import replace_placeholders_in_pdf
-import smtplib
+from google.oauth2.credentials import Credentials
+from googleapiclient.discovery import build
 from email.mime.multipart import MIMEMultipart
 from email.mime.application import MIMEApplication
 from email.mime.text import MIMEText
-import fitz  # PyMuPDF for template analysis
-import logging
-from pathlib import Path
+from app.routes.generate_routes import replace_placeholders_in_pdf
 
-# Set up logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-router = APIRouter()  # Remove prefix="/api"
-
+# -------------------------------------------------------------------
+# Router + setup
+# -------------------------------------------------------------------
+router = APIRouter()
 OUTPUT_DIR = "app/static/generated"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-# --- Configure your SMTP ---
-SMTP_HOST = "smtp.example.com"
-SMTP_PORT = 587
-SMTP_USER = "your_email@example.com"
-SMTP_PASS = "your_email_password"
-
+# -------------------------------------------------------------------
+# Request model
+# -------------------------------------------------------------------
 class SendCertificatesRequest(BaseModel):
-    templateFile: str = Field(..., min_length=1, description="Name of the template file")
-    csvFile: str = Field(..., min_length=1, description="Name of the CSV file")
-    mapping: dict = Field(..., description="Dictionary mapping placeholders to CSV columns")
-    emailColumn: str = Field(..., min_length=1, description="CSV column containing email addresses")
+    templateFile: str = Field(..., description="Template filename (PDF)")
+    csvFile: str = Field(..., description="CSV filename with recipient data")
+    mapping: dict = Field(..., description="Placeholder-to-column mapping")
+    emailColumn: str = Field(..., description="Column containing email addresses")
+    accessToken: str = Field(..., description="Google OAuth2 access token")  # ✅ New
 
+
+# -------------------------------------------------------------------
+# Security: validate uploaded filenames
+# -------------------------------------------------------------------
 def validate_filename(filename: str) -> str:
-    """Prevent directory traversal attacks."""
     if ".." in filename or "/" in filename or "\\" in filename:
         raise HTTPException(status_code=400, detail="Invalid filename")
     return filename
 
-def generate_email_content(template_path: str, row: pd.Series, mappings: dict) -> tuple[str, str]:
-    """
-    Generate dynamic email subject and body based on template and data.
-    """
-    doc = fitz.open(template_path)
-    text = doc[0].get_text()  # Assuming single-page certificate
-    doc.close()
 
-    context_keywords = ["SOCIETY", "CHAPTER", "CERTIFICATE", "EVENT"]
-    context = next((word for word in text.split() if any(kw in word.upper() for kw in context_keywords)), "Certificate")
+# -------------------------------------------------------------------
+# Email content generator
+# -------------------------------------------------------------------
+def generate_email_content(template_path: str, row: pd.Series, mappings: dict):
+    """
+    Generates a dynamic subject and body text based on the data row and mapping.
+    """
+    subject = "Your Certificate"
+    body = "Dear <<Name>>,\n\nPlease find your certificate attached.\n\n"
 
-    subject = f"Your {context} Certificate"
-    body = f"Dear <<Name>>,\n\nCongratulations! Attached is your {context.lower()} certificate. " \
-           f"Please find the details below:\n\n"
     for ph, col in mappings.items():
         val = str(row.get(col, "N/A"))
-        body += f"{ph.replace('_', ' ').title()}: {val}\n"
-    body += f"\nBest regards,\n{context.split()[0] if context.split() else 'Administrator'} Team"
+        body += f"{ph}: {val}\n"
 
+    # Replace placeholders like <<Name>> with actual data
     for ph, col in mappings.items():
         val = str(row.get(col, f"[{ph}]"))
         body = body.replace(f"<<{ph}>>", val)
 
     return subject, body
 
+
+# -------------------------------------------------------------------
+# Gmail API sender
+# -------------------------------------------------------------------
+def send_email_gmail_api(creds: Credentials, recipient: str, subject: str, body: str, pdf_path: str):
+    """
+    Uses Gmail API (via user's OAuth token) to send email with PDF attachment.
+    """
+    service = build("gmail", "v1", credentials=creds)
+
+    msg = MIMEMultipart()
+    msg["to"] = recipient
+    msg["subject"] = subject
+    msg.attach(MIMEText(body, "plain"))
+
+    # Attach certificate
+    with open(pdf_path, "rb") as f:
+        attach = MIMEApplication(f.read(), _subtype="pdf")
+        attach.add_header("Content-Disposition", "attachment", filename=os.path.basename(pdf_path))
+        msg.attach(attach)
+
+    # Encode message to base64 for Gmail API
+    raw_msg = base64.urlsafe_b64encode(msg.as_bytes()).decode()
+
+    # Send the message
+    service.users().messages().send(userId="me", body={"raw": raw_msg}).execute()
+
+
+# -------------------------------------------------------------------
+# Main route: send certificates
+# -------------------------------------------------------------------
 @router.post("/send-certificates")
 def send_certificates(request: SendCertificatesRequest):
-    logger.info(f"Received request for /send-certificates with payload={request.dict()}")
+    """
+    Generates and sends personalized certificates via Gmail API using
+    the access token of the logged-in Google user.
+    """
     template_file = validate_filename(request.templateFile)
     csv_file = validate_filename(request.csvFile)
     template_path = f"app/static/templates/{template_file}"
@@ -79,45 +108,32 @@ def send_certificates(request: SendCertificatesRequest):
     sent_count = 0
     failed = []
 
-    try:
-        server = smtplib.SMTP(SMTP_HOST, SMTP_PORT)
-        server.starttls()
-        server.login(SMTP_USER, SMTP_PASS)
-    except Exception as e:
-        logger.error(f"SMTP connection failed: {e}")
-        raise HTTPException(status_code=500, detail=f"SMTP connection failed: {e}")
+    # ✅ Use the OAuth access token passed from frontend
+    creds = Credentials(token=request.accessToken)
 
-    for index, row in df.iterrows():
+    for idx, row in df.iterrows():
         recipient = row.get(request.emailColumn)
         if not recipient:
-            failed.append(f"Row {index+1} missing email")
+            failed.append(f"Row {idx+1} missing email")
             continue
 
-        output_file = os.path.join(OUTPUT_DIR, f"certificate_{index+1}.pdf")
+        # Generate personalized PDF
+        output_file = os.path.join(OUTPUT_DIR, f"certificate_{idx+1}.pdf")
         try:
             replace_placeholders_in_pdf(template_path, output_file, request.mapping, row)
         except Exception as e:
-            failed.append(f"Row {index+1} PDF generation failed: {e}")
+            failed.append(f"Row {idx+1} PDF generation failed: {e}")
             continue
 
+        # Send via Gmail API
         try:
-            msg = MIMEMultipart()
-            msg["From"] = SMTP_USER
-            msg["To"] = recipient
-            msg["Subject"], email_body = generate_email_content(template_path, row, request.mapping)
-            msg.attach(MIMEText(email_body, "plain"))
-
-            with open(output_file, "rb") as f:
-                pdf_attach = MIMEApplication(f.read(), _subtype="pdf")
-                pdf_attach.add_header("Content-Disposition", "attachment", filename=f"certificate_{index+1}.pdf")
-                msg.attach(pdf_attach)
-
-            server.send_message(msg)
+            subject, body = generate_email_content(template_path, row, request.mapping)
+            send_email_gmail_api(creds, recipient, subject, body, output_file)
             sent_count += 1
         except Exception as e:
-            failed.append(f"Row {index+1} email failed: {e}")
+            print(f"[ERROR] Gmail send failed for {recipient}: {e}")
+            failed.append(f"Row {idx+1} email failed: {str(e)}")
 
-    server.quit()
 
     return JSONResponse({
         "message": f"Emails sent: {sent_count}, Failed: {len(failed)}",

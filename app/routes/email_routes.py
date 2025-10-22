@@ -140,9 +140,7 @@ def preview_email(request: PreviewEmailRequest):
     else:
         body_preview = f"""Dear [Name],
 
-Congratulations on completing the {request.eventName}!
-
-Your personalized certificate is attached to this email.
+Congratulations on completing {request.eventName}!
 
 Please download and save it as your official record of achievement.
 

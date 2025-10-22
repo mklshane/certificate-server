@@ -10,6 +10,7 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.application import MIMEApplication
 from email.mime.text import MIMEText
 from app.routes.generate_routes import replace_placeholders_in_pdf
+import re
 
 # -------------------------------------------------------------------
 # Router + setup
@@ -19,7 +20,7 @@ OUTPUT_DIR = "app/static/generated"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 # -------------------------------------------------------------------
-# Request models
+# Request models (UPDATED with email customization)
 # -------------------------------------------------------------------
 class SendCertificatesRequest(BaseModel):
     templateFile: str = Field(..., description="Template filename (PDF)")
@@ -28,11 +29,17 @@ class SendCertificatesRequest(BaseModel):
     emailColumn: str = Field(..., description="Column containing email addresses")
     eventName: str = Field(..., description="Event name for email subject/body")
     accessToken: str = Field(..., description="Google OAuth2 access token")
+    senderName: str = Field(..., description="Account owner name for email signature")
+    emailSubject: str = Field(default="", description="Custom email subject")  # NEW
+    emailBody: str = Field(default="", description="Custom email body")  # NEW
 
 class PreviewEmailRequest(BaseModel):
     mapping: dict
     emailColumn: str
     eventName: str
+    senderName: str = Field(default="Your Name", description="Sender name for preview")
+    emailSubject: str = Field(default="", description="Custom email subject")  # NEW
+    emailBody: str = Field(default="", description="Custom email body")  # NEW
 
 # -------------------------------------------------------------------
 # Security: validate uploaded filenames
@@ -43,163 +50,172 @@ def validate_filename(filename: str) -> str:
     return filename
 
 # -------------------------------------------------------------------
-# Beautiful HTML Email Generator
+# Email Generator with Customization Support
 # -------------------------------------------------------------------
-def generate_email_content(row: pd.Series, mappings: dict, event_name: str):
-    """Generates professional HTML email with dynamic content"""
+def generate_email_content(row: pd.Series, mappings: dict, event_name: str, sender_name: str, 
+                          custom_subject: str = "", custom_body: str = ""):
+    """Generates email content with support for custom templates and placeholders"""
     
-    # Extract name for greeting (prioritize "Name" field)
+    # Extract name for greeting
     name = "Recipient"
     for ph, col in mappings.items():
         if ph.lower() == "name":
             name = str(row.get(col, "Recipient"))
             break
     
-    subject = f"Your {event_name} Certificate"
+    # Use custom subject or default
+    if custom_subject:
+        subject = replace_placeholders_in_text(custom_subject, row, mappings)
+    else:
+        subject = f"Your {event_name} Certificate"
     
-    html_body = f"""
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <meta charset="utf-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1">
-        <style>
-            body {{ 
-                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; 
-                line-height: 1.6; 
-                color: #333; 
-                max-width: 600px; 
-                margin: 0 auto; 
-                padding: 20px; 
-                background: #f8fafc;
-            }}
-            .header {{ 
-                text-align: center; 
-                padding: 30px 20px; 
-                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
-                color: white; 
-                border-radius: 16px; 
-                margin-bottom: 30px; 
-                box-shadow: 0 10px 25px rgba(102, 126, 234, 0.3);
-            }}
-            .greeting {{ 
-                font-size: 28px; 
-                font-weight: 700; 
-                margin-bottom: 8px; 
-            }}
-            .content {{ 
-                background: white; 
-                padding: 40px; 
-                border-radius: 16px; 
-                border: 1px solid #e2e8f0; 
-                box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
-            }}
-            .certificate-notice {{ 
-                background: linear-gradient(135deg, #10b981 0%, #059669 100%); 
-                color: white; 
-                padding: 24px; 
-                border-radius: 12px; 
-                text-align: center; 
-                font-weight: 600; 
-                margin: 30px 0; 
-                box-shadow: 0 4px 15px rgba(16, 185, 129, 0.2);
-            }}
-            .highlight {{ 
-                background: #fef3c7; 
-                padding: 20px; 
-                border-radius: 12px; 
-                border-left: 5px solid #f59e0b; 
-                margin: 24px 0; 
-            }}
-            .footer {{ 
-                text-align: center; 
-                margin-top: 40px; 
-                padding-top: 30px; 
-                border-top: 1px solid #e2e8f0; 
-                color: #64748b; 
-                font-size: 14px; 
-            }}
-            .event-name {{ color: #1e40af; font-weight: 600; }}
-        </style>
-    </head>
-    <body>
-        <div class="header">
-            <h1 class="greeting"> Congratulations, {name}!</h1>
-            <p style="margin: 0; opacity: 0.9; font-size: 18px;">Your certificate is ready</p>
-        </div>
-        
-        <div class="content">
-            <p style="font-size: 18px; margin-bottom: 24px; color: #1e293b; line-height: 1.7;">
-                We're thrilled to present your personalized certificate for the
-                <strong class="event-name">{event_name}</strong>.
-            </p>
-            
-            <div class="certificate-notice">
-                📎 <strong>Your Official Certificate</strong><br>
-                <span style="font-size: 14px; opacity: 0.9;">is attached to this email</span>
-            </div>
-            
-            <div class="highlight">
-                <strong>💡 Important:</strong> Please download and save your certificate 
-                as it contains your official record of achievement.
-            </div>
-            
-            <p style="margin-bottom: 0; color: #475569; font-size: 16px; line-height: 1.7;">
-                Thank you for your participation and outstanding achievement!
-            </p>
-        </div>
-        
-        <div class="footer">
-            <p style="margin: 0 0 12px 0;">Best regards</p>
-            <p style="margin: 0; font-weight: 600; color: #1e40af; font-size: 16px;">
-                Certificate Wizard Team
-            </p>
-        </div>
-    </body>
-    </html>
-    """
+    # Use custom body or default
+    if custom_body:
+        body = replace_placeholders_in_text(custom_body, row, mappings)
+        # Ensure signature is included
+        if not body.strip().endswith(sender_name):
+            body += f"\n\nBest regards,\n{sender_name}"
+    else:
+        # Default email body
+        body = f"""Dear {name},
+
+Congratulations on completing the {event_name}!
+
+Your personalized certificate is attached to this email.
+
+Please download and save it as your official record of achievement.
+
+Thank you for your participation!
+
+Best regards,
+{sender_name}"""
     
-    return subject, html_body
+    return subject, body
+
+def replace_placeholders_in_text(text: str, row: pd.Series, mappings: dict) -> str:
+    """Replace placeholders in text with actual values from row data"""
+    result = text
+    
+    # Replace <<placeholder>> patterns
+    for placeholder, column_name in mappings.items():
+        if column_name and column_name in row:
+            value = str(row[column_name])
+            result = result.replace(f"<<{placeholder}>>", value)
+    
+    # Also support {column_name} syntax for flexibility
+    for column_name in row.index:
+        value = str(row[column_name])
+        result = result.replace(f"{{{column_name}}}", value)
+    
+    return result
 
 # -------------------------------------------------------------------
-# Email Preview API
+# Email Preview API (UPDATED)
 # -------------------------------------------------------------------
 @router.post("/preview-email")
 def preview_email(request: PreviewEmailRequest):
-    """Preview email content for frontend"""
-    subject = f"Your {request.eventName} Certificate"
+    """Preview email content for frontend with customization support"""
+    
+    # Use custom subject or default
+    if request.emailSubject:
+        subject = request.emailSubject
+        # Replace placeholders with sample values for preview
+        for placeholder, column_name in request.mapping.items():
+            if column_name:
+                subject = subject.replace(f"<<{placeholder}>>", f"[{column_name}]")
+    else:
+        subject = f"Your {request.eventName} Certificate"
+    
+    # Use custom body or default
+    if request.emailBody:
+        body_preview = request.emailBody
+        # Replace placeholders with sample values for preview
+        for placeholder, column_name in request.mapping.items():
+            if column_name:
+                body_preview = body_preview.replace(f"<<{placeholder}>>", f"[{column_name}]")
+        
+        # Ensure signature is included
+        if not body_preview.strip().endswith(request.senderName):
+            body_preview += f"\n\nBest regards,\n{request.senderName}"
+    else:
+        body_preview = f"""Dear [Name],
+
+Congratulations on completing the {request.eventName}!
+
+Your personalized certificate is attached to this email.
+
+Please download and save it as your official record of achievement.
+
+Thank you for your participation!
+
+Best regards,
+{request.senderName}"""
     
     return {
         "subject": subject,
-        "bodyPreview": f"Dear [Name],\n\nCongratulations on completing the {request.eventName}!\n\nYour certificate is attached."
+        "bodyPreview": body_preview
     }
 
 # -------------------------------------------------------------------
-# Gmail API sender (HTML support)
+# FIXED Gmail API sender (PDF ATTACHMENT GUARANTEED)
 # -------------------------------------------------------------------
-def send_email_gmail_api(creds: Credentials, recipient: str, subject: str, html_body: str, pdf_path: str):
-    """Send HTML email with PDF attachment via Gmail API"""
+def send_email_gmail_api(creds: Credentials, recipient: str, subject: str, body: str, pdf_path: str):
+    """Send PLAIN TEXT email with PDF attachment via Gmail API"""
+    
+    # Verify PDF file exists before sending
+    if not os.path.exists(pdf_path):
+        raise Exception(f"PDF file not found: {pdf_path}")
+    
+    print(f"Sending email to {recipient} with attachment: {pdf_path}")
+    
     service = build("gmail", "v1", credentials=creds)
     
-    msg = MIMEMultipart('alternative')
+    # Use 'mixed' for attachments (more reliable)
+    msg = MIMEMultipart('mixed')
     msg['to'] = recipient
     msg['subject'] = subject
     
-    # HTML body
-    msg.attach(MIMEText(html_body, 'html'))
+    # Plain text body
+    text_part = MIMEText(body, 'plain')
+    msg.attach(text_part)
     
-    # Attach PDF
-    with open(pdf_path, "rb") as f:
-        attach = MIMEApplication(f.read(), _subtype="pdf")
-        attach.add_header("Content-Disposition", "attachment", filename=os.path.basename(pdf_path))
+    # FIXED PDF Attachment
+    try:
+        with open(pdf_path, "rb") as f:
+            pdf_data = f.read()
+            print(f"PDF size: {len(pdf_data)} bytes")
+        
+        attach = MIMEApplication(pdf_data, _subtype="pdf")
+        attach.add_header(
+            'Content-Disposition', 
+            'attachment', 
+            filename=os.path.basename(pdf_path)
+        )
         msg.attach(attach)
+        print(f"PDF attached successfully: {os.path.basename(pdf_path)}")
+        
+    except Exception as attach_error:
+        print(f"PDF attachment failed: {attach_error}")
+        raise Exception(f"PDF attachment failed: {attach_error}")
     
     # Encode for Gmail API
-    raw_msg = base64.urlsafe_b64encode(msg.as_bytes()).decode()
-    service.users().messages().send(userId="me", body={"raw": raw_msg}).execute()
+    try:
+        raw_msg = base64.urlsafe_b64encode(msg.as_bytes()).decode()
+        print(f"Message encoded, sending to {recipient}")
+        
+        result = service.users().messages().send(
+            userId="me", 
+            body={"raw": raw_msg}
+        ).execute()
+        
+        print(f"Email sent successfully! Message ID: {result.get('id')}")
+        
+    except Exception as send_error:
+        print(f"Gmail API send failed: {send_error}")
+        raise Exception(f"Gmail send failed: {send_error}")
 
 # -------------------------------------------------------------------
-# Main send certificates route
+# Main send certificates route (UPDATED)
 # -------------------------------------------------------------------
 @router.post("/send-certificates")
 def send_certificates(request: SendCertificatesRequest):
@@ -209,15 +225,22 @@ def send_certificates(request: SendCertificatesRequest):
     template_path = f"app/static/templates/{template_file}"
     csv_path = f"app/static/csv/{csv_file}"
 
-    if not os.path.exists(template_path) or not os.path.exists(csv_path):
-        raise HTTPException(status_code=400, detail="Template or CSV not found")
+    if not os.path.exists(template_path):
+        raise HTTPException(status_code=400, detail=f"Template not found: {template_path}")
+    if not os.path.exists(csv_path):
+        raise HTTPException(status_code=400, detail=f"CSV not found: {csv_path}")
 
     df = pd.read_csv(csv_path)
     sent_count = 0
     failed = []
+    
+    print(f"Starting batch: {len(df)} recipients")
 
     # Use OAuth access token
-    creds = Credentials(token=request.accessToken)
+    try:
+        creds = Credentials(token=request.accessToken)
+    except Exception as creds_error:
+        raise HTTPException(status_code=401, detail=f"Invalid access token: {creds_error}")
 
     for idx, row in df.iterrows():
         recipient = row.get(request.emailColumn)
@@ -225,35 +248,66 @@ def send_certificates(request: SendCertificatesRequest):
             failed.append(f"Row {idx+1}: Missing email")
             continue
 
-        # Generate personalized PDF
+        recipient_email = str(recipient).strip()
         output_file = os.path.join(OUTPUT_DIR, f"certificate_{idx+1}.pdf")
+        
+        print(f"Generating PDF {idx+1}/{len(df)} for {recipient_email}")
+
+        # Generate personalized PDF
         try:
             replace_placeholders_in_pdf(template_path, output_file, request.mapping, row)
-        except Exception as e:
-            failed.append(f"Row {idx+1}: PDF generation failed - {str(e)}")
+            if not os.path.exists(output_file):
+                raise Exception("PDF generation failed - file not created")
+            print(f"PDF generated: {output_file}")
+        except Exception as pdf_error:
+            error_msg = f"Row {idx+1}: PDF generation failed - {str(pdf_error)}"
+            failed.append(error_msg)
+            print(f"{error_msg}")
             continue
 
-        # Send email
+        # Send email (UPDATED with customization)
         try:
-            subject, html_body = generate_email_content(row, request.mapping, request.eventName)
-            send_email_gmail_api(creds, str(recipient).strip(), subject, html_body, output_file)
+            subject, body = generate_email_content(
+                row, 
+                request.mapping, 
+                request.eventName, 
+                request.senderName,
+                request.emailSubject,
+                request.emailBody
+            )
+            send_email_gmail_api(creds, recipient_email, subject, body, output_file)
             sent_count += 1
-        except Exception as e:
-            print(f"[ERROR] Email failed for {recipient}: {e}")
-            failed.append(f"Row {idx+1}: Email failed - {str(e)}")
+            print(f"SUCCESS: Email sent to {recipient_email}")
+            
+            # Only delete SUCCESSFULLY sent files
+            if os.path.exists(output_file):
+                os.remove(output_file)
+                
+        except Exception as email_error:
+            error_msg = f"Row {idx+1}: Email failed - {str(email_error)}"
+            failed.append(error_msg)
+            print(f"{error_msg}")
+            # Keep failed PDF for debugging
+            continue
 
-    # Cleanup generated files
+    # Final cleanup (any remaining files)
     for file in os.listdir(OUTPUT_DIR):
-        os.remove(os.path.join(OUTPUT_DIR, file))
+        file_path = os.path.join(OUTPUT_DIR, file)
+        if os.path.isfile(file_path):
+            os.remove(file_path)
 
-    success_msg = f"✅ Successfully sent {sent_count} certificates for '{request.eventName}'!"
+    success_msg = f"Successfully sent {sent_count} certificates for '{request.eventName}'!"
     
-    return JSONResponse({
+    response = {
         "message": success_msg,
         "details": {
             "event": request.eventName,
             "sent": sent_count,
-            "failed": len(failed)
+            "failed": len(failed),
+            "total": len(df)
         },
         "failed_details": failed if failed else None
-    })
+    }
+    
+    print(f"BATCH COMPLETE: {sent_count} sent, {len(failed)} failed")
+    return JSONResponse(response)

@@ -1,5 +1,5 @@
 import os
-import fitz  # PyMuPDF
+import fitz 
 import pandas as pd
 import re
 from fastapi import APIRouter, HTTPException
@@ -15,7 +15,6 @@ PLACEHOLDER_RE = re.compile(r"<<(.*?)>>")
 
 fitz.TOOLS.set_annot_stem("annot")
 
-# Register custom font
 FONT_PATH = "app/fonts/arial.ttf"
 if os.path.exists(FONT_PATH):
     fitz.Font("custom_font", FONT_PATH)
@@ -32,12 +31,12 @@ def replace_placeholders_in_pdf(input_path: str, output_path: str, mappings: dic
     doc = fitz.open(input_path)
 
     for page in doc:
-        # First pass: find all placeholders and their positions
+        # first pass: find all placeholders and their positions
         placeholder_data = []
         text_instances = page.get_text("dict")
 
         for block in text_instances.get("blocks", []):
-            if block["type"] != 0:  # Only text blocks
+            if block["type"] != 0: 
                 continue
             for line in block.get("lines", []):
                 for span in line.get("spans", []):
@@ -56,7 +55,7 @@ def replace_placeholders_in_pdf(input_path: str, output_path: str, mappings: dic
                             print(f"Warning: No value for column '{csv_col}' in row")
                             continue
 
-                        # Calculate the exact position of the placeholder
+                        # calculate the exact position of the placeholder
                         start_pos, end_pos = match.span()
                         total_chars = max(len(span_text), 1)
                         char_width = span_rect.width / total_chars
@@ -64,11 +63,11 @@ def replace_placeholders_in_pdf(input_path: str, output_path: str, mappings: dic
                         x1 = span_rect.x0 + (char_width * end_pos)
                         placeholder_rect = fitz.Rect(x0, span_rect.y0, x1, span_rect.y1)
 
-                        # Expand rectangle for text insertion
+                        # expand rectangle for text insertion
                         adjusted_rect = fitz.Rect(
                             x0 - 2,
                             span_rect.y0 - 2,
-                            x1 + (char_width * len(replacement_text) * 1.5),  # Adjust width for text length
+                            x1 + (char_width * len(replacement_text) * 1.5), 
                             span_rect.y1 + 2
                         )
 
@@ -77,19 +76,19 @@ def replace_placeholders_in_pdf(input_path: str, output_path: str, mappings: dic
                             "insert_rect": adjusted_rect,
                             "text": replacement_text,
                             "fontsize": span.get("size", 12),
-                            "fontname": span.get("font", "helv"),  # Try to use detected font
-                            "color": (0, 0, 0)  # Default to black
+                            "fontname": span.get("font", "helv"),  
+                            "color": (0, 0, 0)  # default to black
                         })
                         print(f"Replacing '{match.group(0)}' with '{replacement_text}' at rect {adjusted_rect}")
 
-        # Second pass: redact placeholders
+        # second pass: replace placeholders
         for data in placeholder_data:
-            page.add_redact_annot(data["rect"], fill=None)  # Transparent redaction
+            page.add_redact_annot(data["rect"], fill=None) 
 
         page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE)
         print(f"Applied {len(placeholder_data)} redactions on page {page.number}")
 
-        # Third pass: insert replacement text
+        # third pass: insert replacement text
         for data in placeholder_data:
             try:
                 page.insert_textbox(
@@ -103,7 +102,7 @@ def replace_placeholders_in_pdf(input_path: str, output_path: str, mappings: dic
                 print(f"Inserted text '{data['text']}' at rect {data['insert_rect']}")
             except Exception as e:
                 print(f"Text insertion failed for '{data['text']}' at {data['insert_rect']}: {e}")
-                # Fallback with simpler insertion
+             
                 try:
                     page.insert_text(
                         data["insert_rect"].tl + (0, data["fontsize"] * 1),
@@ -116,7 +115,7 @@ def replace_placeholders_in_pdf(input_path: str, output_path: str, mappings: dic
                 except Exception as e2:
                     print(f"Fallback insertion failed: {e2}")
 
-    doc.save(output_path, garbage=4, deflate=True)  # Optimize PDF
+    doc.save(output_path, garbage=4, deflate=True)  
     doc.close()
     print(f"Saved filled PDF to {output_path}")
 
@@ -134,7 +133,7 @@ def debug_pdf_text(input_path: str):
 
         text_dict = page.get_text("dict")
         for block in text_dict.get("blocks", []):
-            if block["type"] == 0:  # Text block
+            if block["type"] == 0:  
                 for line in block.get("lines", []):
                     for span in line.get("spans", []):
                         print(f"  Span: '{span.get('text', '')}' at {span.get('bbox')}, "
@@ -175,7 +174,7 @@ def generate_preview():
     print(f"Mappings: {mappings}")
     print(f"Row data: {dict(row)}")
 
-    # Generate replacement values
+    # generate replacement values
     for key, csv_col in mappings.items():
         replacement_text = str(row.get(csv_col, ""))
         print(f"Replacing <<{key}>> with '{replacement_text}' (from column '{csv_col}')")

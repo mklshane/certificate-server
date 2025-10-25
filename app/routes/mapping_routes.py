@@ -10,7 +10,7 @@ router = APIRouter()
 class MappingRequest(BaseModel):
     templateFile: str
     csvFile: str
-    mappings: dict  # { "Name": "Full Name", "Year": "Batch", ... }
+    mappings: dict 
     emailColumn: str
 
 @router.post("/save-mapping")

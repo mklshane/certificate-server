@@ -12,16 +12,10 @@ from email.mime.text import MIMEText
 from app.routes.generate_routes import replace_placeholders_in_pdf
 import re
 
-# -------------------------------------------------------------------
-# Router + setup
-# -------------------------------------------------------------------
 router = APIRouter()
 OUTPUT_DIR = "app/static/generated"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-# -------------------------------------------------------------------
-# Request models (UPDATED with email customization)
-# -------------------------------------------------------------------
 class SendCertificatesRequest(BaseModel):
     templateFile: str = Field(..., description="Template filename (PDF)")
     csvFile: str = Field(..., description="CSV filename with recipient data")
@@ -30,28 +24,22 @@ class SendCertificatesRequest(BaseModel):
     eventName: str = Field(..., description="Event name for email subject/body")
     accessToken: str = Field(..., description="Google OAuth2 access token")
     senderName: str = Field(..., description="Account owner name for email signature")
-    emailSubject: str = Field(default="", description="Custom email subject")  # NEW
-    emailBody: str = Field(default="", description="Custom email body")  # NEW
+    emailSubject: str = Field(default="", description="Custom email subject")  
+    emailBody: str = Field(default="", description="Custom email body")  
 
 class PreviewEmailRequest(BaseModel):
     mapping: dict
     emailColumn: str
     eventName: str
     senderName: str = Field(default="Your Name", description="Sender name for preview")
-    emailSubject: str = Field(default="", description="Custom email subject")  # NEW
-    emailBody: str = Field(default="", description="Custom email body")  # NEW
+    emailSubject: str = Field(default="", description="Custom email subject")  
+    emailBody: str = Field(default="", description="Custom email body")
 
-# -------------------------------------------------------------------
-# Security: validate uploaded filenames
-# -------------------------------------------------------------------
 def validate_filename(filename: str) -> str:
     if ".." in filename or "/" in filename or "\\" in filename:
         raise HTTPException(status_code=400, detail="Invalid filename")
     return filename
 
-# -------------------------------------------------------------------
-# Email Generator with Customization Support
-# -------------------------------------------------------------------
 def generate_email_content(row: pd.Series, mappings: dict, event_name: str, sender_name: str, 
                           custom_subject: str = "", custom_body: str = ""):
     """Generates email content with support for custom templates and placeholders"""
@@ -72,11 +60,10 @@ def generate_email_content(row: pd.Series, mappings: dict, event_name: str, send
     # Use custom body or default
     if custom_body:
         body = replace_placeholders_in_text(custom_body, row, mappings)
-        # Ensure signature is included
+      
         if not body.strip().endswith(sender_name):
             body += f"\n\nBest regards,\n{sender_name}"
     else:
-        # Default email body
         body = f"""Dear {name},
 
 Congratulations on completing the {event_name}!
@@ -102,16 +89,12 @@ def replace_placeholders_in_text(text: str, row: pd.Series, mappings: dict) -> s
             value = str(row[column_name])
             result = result.replace(f"<<{placeholder}>>", value)
     
-    # Also support {column_name} syntax for flexibility
     for column_name in row.index:
         value = str(row[column_name])
         result = result.replace(f"{{{column_name}}}", value)
     
     return result
 
-# -------------------------------------------------------------------
-# Email Preview API (UPDATED)
-# -------------------------------------------------------------------
 @router.post("/preview-email")
 def preview_email(request: PreviewEmailRequest):
     """Preview email content for frontend with customization support"""
@@ -129,12 +112,10 @@ def preview_email(request: PreviewEmailRequest):
     # Use custom body or default
     if request.emailBody:
         body_preview = request.emailBody
-        # Replace placeholders with sample values for preview
         for placeholder, column_name in request.mapping.items():
             if column_name:
                 body_preview = body_preview.replace(f"<<{placeholder}>>", f"[{column_name}]")
         
-        # Ensure signature is included
         if not body_preview.strip().endswith(request.senderName):
             body_preview += f"\n\nBest regards,\n{request.senderName}"
     else:
@@ -154,13 +135,9 @@ Best regards,
         "bodyPreview": body_preview
     }
 
-# -------------------------------------------------------------------
-# FIXED Gmail API sender (PDF ATTACHMENT GUARANTEED)
-# -------------------------------------------------------------------
 def send_email_gmail_api(creds: Credentials, recipient: str, subject: str, body: str, pdf_path: str):
-    """Send PLAIN TEXT email with PDF attachment via Gmail API"""
+    """Send email with PDF attachment via Gmail API"""
     
-    # Verify PDF file exists before sending
     if not os.path.exists(pdf_path):
         raise Exception(f"PDF file not found: {pdf_path}")
     
@@ -168,7 +145,6 @@ def send_email_gmail_api(creds: Credentials, recipient: str, subject: str, body:
     
     service = build("gmail", "v1", credentials=creds)
     
-    # Use 'mixed' for attachments (more reliable)
     msg = MIMEMultipart('mixed')
     msg['to'] = recipient
     msg['subject'] = subject
@@ -196,7 +172,6 @@ def send_email_gmail_api(creds: Credentials, recipient: str, subject: str, body:
         print(f"PDF attachment failed: {attach_error}")
         raise Exception(f"PDF attachment failed: {attach_error}")
     
-    # Encode for Gmail API
     try:
         raw_msg = base64.urlsafe_b64encode(msg.as_bytes()).decode()
         print(f"Message encoded, sending to {recipient}")
@@ -211,10 +186,6 @@ def send_email_gmail_api(creds: Credentials, recipient: str, subject: str, body:
     except Exception as send_error:
         print(f"Gmail API send failed: {send_error}")
         raise Exception(f"Gmail send failed: {send_error}")
-
-# -------------------------------------------------------------------
-# Main send certificates route (UPDATED)
-# -------------------------------------------------------------------
 @router.post("/send-certificates")
 def send_certificates(request: SendCertificatesRequest):
     """Generate and send personalized certificates via Gmail API"""
@@ -251,7 +222,6 @@ def send_certificates(request: SendCertificatesRequest):
         
         print(f"Generating PDF {idx+1}/{len(df)} for {recipient_email}")
 
-        # Generate personalized PDF
         try:
             replace_placeholders_in_pdf(template_path, output_file, request.mapping, row)
             if not os.path.exists(output_file):
@@ -263,7 +233,6 @@ def send_certificates(request: SendCertificatesRequest):
             print(f"{error_msg}")
             continue
 
-        # Send email (UPDATED with customization)
         try:
             subject, body = generate_email_content(
                 row, 
@@ -285,10 +254,8 @@ def send_certificates(request: SendCertificatesRequest):
             error_msg = f"Row {idx+1}: Email failed - {str(email_error)}"
             failed.append(error_msg)
             print(f"{error_msg}")
-            # Keep failed PDF for debugging
             continue
 
-    # Final cleanup (any remaining files)
     for file in os.listdir(OUTPUT_DIR):
         file_path = os.path.join(OUTPUT_DIR, file)
         if os.path.isfile(file_path):
